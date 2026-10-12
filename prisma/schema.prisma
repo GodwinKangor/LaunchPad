@@ -1,0 +1,91 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// State columns are strings validated in application code (lib/types.ts), so
+// adding a state never needs an enum migration.
+
+model Project {
+  id                 String   @id
+  ownerId            String
+  name               String   @unique
+  repoUrl            String
+  branch             String
+  rootDirectory      String   @default("")
+  port               Int
+  healthPath         String   @default("/")
+  status             String   @default("idle")
+  activeDeploymentId String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  deployments Deployment[]
+  variables   EnvironmentVariable[]
+  operations  Operation[]
+
+  @@index([ownerId, createdAt])
+}
+
+model Deployment {
+  id            String    @id
+  projectId     String
+  project       Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  kind          String    @default("deploy")
+  state         String    @default("queued")
+  branch        String
+  commitSha     String?
+  image         String?
+  imageRetained Boolean   @default(false)
+  containerName String?
+  rollbackOfId  String?
+  error         String?
+  createdAt     DateTime  @default(now())
+  startedAt     DateTime?
+  finishedAt    DateTime?
+
+  logs DeploymentLog[]
+
+  @@index([projectId, createdAt])
+  @@index([state])
+}
+
+model DeploymentLog {
+  id           Int        @id @default(autoincrement())
+  deploymentId String
+  deployment   Deployment @relation(fields: [deploymentId], references: [id], onDelete: Cascade)
+  message      String
+  createdAt    DateTime   @default(now())
+
+  @@index([deploymentId, id])
+}
+
+model EnvironmentVariable {
+  id         String   @id
+  projectId  String
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  key        String
+  // AES-256-GCM, see lib/crypto.ts. Plaintext values are never stored.
+  ciphertext String
+  updatedAt  DateTime @updatedAt
+
+  @@unique([projectId, key])
+}
+
+model Operation {
+  id         String    @id
+  projectId  String
+  project    Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  action     String
+  status     String    @default("queued")
+  error      String?
+  createdAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  @@index([projectId, createdAt])
+  @@index([status])
+}
