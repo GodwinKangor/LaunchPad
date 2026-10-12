@@ -1,0 +1,10 @@
+node_modules/
+.next/
+.env
+.env.*
+!.env.example
+*.tsbuildinfo
+.launchpad-demo.json
+.launchpad-demo.json.*
+coverage/
+.DS_Store
