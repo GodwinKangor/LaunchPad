@@ -1,0 +1,14 @@
+# Base proxy configuration. The worker writes one snippet per project into
+# /etc/caddy/routes and reloads Caddy; nothing here is edited by hand.
+{
+	# Admin API on loopback only: deployed applications share a network with
+	# this container and must not be able to reconfigure the proxy.
+	admin localhost:2019
+}
+
+import /etc/caddy/routes/*.caddy
+
+# Any hostname without a deployed application.
+:80 {
+	respond "No LaunchPad application is deployed at this address." 404
+}

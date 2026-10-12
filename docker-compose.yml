@@ -1,5 +1,17 @@
-# Local development stack. Later milestones add the dashboard, worker and proxy.
+# Local development stack: dashboard, worker, proxy, PostgreSQL and Redis.
+#
+#   cp .env.example .env    # then fill in the placeholders
+#   docker compose up --build
+#
+# Dashboard: http://localhost:3000    Deployed apps: http://<name>.localhost:8080
+#
+# In production the worker, proxy and application containers belong on a
+# dedicated host; see "Production notes" in the README.
 name: launchpad
+
+x-build: &build
+  context: .
+  dockerfile: infrastructure/Dockerfile
 
 services:
   postgres:
@@ -21,6 +33,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    # Jobs must never be evicted, and should survive a Redis restart.
     command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
     ports:
       - "127.0.0.1:6379:6379"
@@ -33,9 +46,101 @@ services:
       retries: 20
     networks: [internal]
 
+  migrate:
+    build: { <<: *build, target: dashboard }
+    command: ["npx", "prisma", "migrate", "deploy"]
+    environment:
+      DATABASE_URL: postgresql://launchpad:launchpad@postgres:5432/launchpad
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
+    networks: [internal]
+
+  dashboard:
+    build: { <<: *build, target: dashboard }
+    environment:
+      DEMO_MODE: "false"
+      OWNER_EMAIL: ${OWNER_EMAIL:?set OWNER_EMAIL in .env}
+      OWNER_PASSWORD: ${OWNER_PASSWORD:?set OWNER_PASSWORD in .env}
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
+      ENV_ENCRYPTION_KEY: ${ENV_ENCRYPTION_KEY:?set ENV_ENCRYPTION_KEY in .env}
+      GITHUB_ALLOWED_OWNERS: ${GITHUB_ALLOWED_OWNERS:?set GITHUB_ALLOWED_OWNERS in .env}
+      APP_URL: ${APP_URL:-http://localhost:3000}
+      APP_DOMAIN: ${APP_DOMAIN:-localhost}
+      APP_SCHEME: ${APP_SCHEME:-http}
+      APP_PUBLIC_PORT: ${APP_PUBLIC_PORT:-8080}
+      DATABASE_URL: postgresql://launchpad:launchpad@postgres:5432/launchpad
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+    # Deliberately not on the apps network and without the Docker socket.
+    networks: [internal]
+
+  worker:
+    build: { <<: *build, target: worker }
+    # Only what the worker needs: it never sees the dashboard password or session secret.
+    environment:
+      DEMO_MODE: "false"
+      ENV_ENCRYPTION_KEY: ${ENV_ENCRYPTION_KEY:?set ENV_ENCRYPTION_KEY in .env}
+      GITHUB_ALLOWED_OWNERS: ${GITHUB_ALLOWED_OWNERS:?set GITHUB_ALLOWED_OWNERS in .env}
+      APP_DOMAIN: ${APP_DOMAIN:-localhost}
+      APP_SCHEME: ${APP_SCHEME:-http}
+      DATABASE_URL: postgresql://launchpad:launchpad@postgres:5432/launchpad
+      REDIS_URL: redis://redis:6379
+      APP_NETWORK: launchpad_apps
+      CADDY_CONTAINER: launchpad-caddy
+      ROUTES_DIR: /routes
+      BUILD_TIMEOUT_MS: ${BUILD_TIMEOUT_MS:-600000}
+      CLONE_TIMEOUT_MS: ${CLONE_TIMEOUT_MS:-120000}
+      HEALTH_TIMEOUT_MS: ${HEALTH_TIMEOUT_MS:-60000}
+      RETAINED_RELEASES: ${RETAINED_RELEASES:-3}
+      BUILD_LOG_MAX_LINES: ${BUILD_LOG_MAX_LINES:-5000}
+      APP_MEMORY_MB: ${APP_MEMORY_MB:-512}
+      APP_CPUS: ${APP_CPUS:-1}
+      APP_PIDS_LIMIT: ${APP_PIDS_LIMIT:-256}
+      APP_LOG_MAX_SIZE: ${APP_LOG_MAX_SIZE:-10m}
+      APP_LOG_MAX_FILES: ${APP_LOG_MAX_FILES:-3}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+    volumes:
+      # Grants control of the host's Docker daemon (root-equivalent). Only the worker gets it.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - caddy_routes:/routes
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+      caddy: { condition: service_started }
+    restart: unless-stopped
+    # internal: database and queue. apps: health checks against new containers.
+    networks: [internal, apps]
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: launchpad-caddy
+    ports:
+      - "${CADDY_HTTP_PORT:-8080}:80"
+      - "${CADDY_HTTPS_PORT:-8443}:443"
+    volumes:
+      - ./infrastructure/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_routes:/etc/caddy/routes
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+    networks: [apps]
+
 volumes:
   postgres_data:
   redis_data:
+  caddy_routes:
+  caddy_data:
+  caddy_config:
 
 networks:
+  # Database and queue. Deployed applications are never attached to this network.
   internal:
+  # Proxy, worker and deployed applications. The fixed name is what the worker attaches containers to.
+  apps:
+    name: launchpad_apps

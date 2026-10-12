@@ -2,11 +2,13 @@ import { DelayedError, Queue, Worker, type Job as QueueJob } from 'bullmq';
 import IORedis from 'ioredis';
 import { baseConfig, loadWorkerConfig } from '../lib/config';
 import { runDeployment } from '../lib/engine/deploy';
-import { NoopRouter, type EngineDeps } from '../lib/engine/types';
+import type { EngineDeps } from '../lib/engine/types';
 import { errorMessage } from '../lib/errors';
 import { JOB_QUEUE, jobKey, type Job } from '../lib/queue';
 import { createPrismaStore } from '../lib/store/prisma';
+import { CaddyRouter } from './caddy';
 import { DockerDriver } from './docker';
+import { exec } from './exec';
 import { abandon, recoverJobs } from './recover';
 import { RedisLocks } from './redis-locks';
 
@@ -25,7 +27,15 @@ async function main() {
   const deps: EngineDeps = {
     store,
     driver: new DockerDriver(workerConfig),
-    router: new NoopRouter(),
+    router: new CaddyRouter({
+      routesDir: workerConfig.routesDir,
+      domain: config.appDomain,
+      scheme: config.appScheme,
+      // The admin API stays on localhost inside the proxy container, out of reach of deployed apps.
+      reload: async () => {
+        await exec('docker', ['exec', workerConfig.caddyContainer, 'caddy', 'reload', '--config', '/etc/caddy/Caddyfile', '--adapter', 'caddyfile'], { timeoutMs: 30_000 });
+      },
+    }),
     locks: new RedisLocks(redis),
     encryptionKey: config.encryptionKey,
     settings: {
