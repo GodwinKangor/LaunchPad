@@ -84,6 +84,13 @@ export interface Store {
   /** Compare-and-set on state. Returns null when the deployment was not in one of `from`. */
   transitionDeployment(id: string, from: DeploymentState[], to: DeploymentState, patch?: DeploymentPatch): Promise<Deployment | null>;
   updateDeployment(id: string, patch: DeploymentPatch): Promise<void>;
+  /**
+   * Marks a `starting` deployment healthy and makes it the project's active
+   * release in one atomic step, so a crash can never leave a healthy
+   * deployment that the project does not point at. Returns false if the
+   * deployment was no longer `starting`.
+   */
+  promoteDeployment(id: string, patch: DeploymentPatch): Promise<boolean>;
   listActiveDeployments(): Promise<Deployment[]>;
 
   appendLogs(deploymentId: string, messages: string[]): Promise<void>;

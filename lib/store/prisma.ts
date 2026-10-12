@@ -132,6 +132,17 @@ export class PrismaStore implements Store {
     await this.db.deployment.updateMany({ where: { id }, data: patch });
   }
 
+  async promoteDeployment(id: string, patch: DeploymentPatch): Promise<boolean> {
+    return this.db.$transaction(async (tx) => {
+      const deployment = await tx.deployment.findUnique({ where: { id }, select: { projectId: true } });
+      if (!deployment) return false;
+      const updated = await tx.deployment.updateMany({ where: { id, state: 'starting' }, data: { ...patch, state: 'healthy' } });
+      if (updated.count === 0) return false;
+      await tx.project.update({ where: { id: deployment.projectId }, data: { activeDeploymentId: id, status: 'running' } });
+      return true;
+    });
+  }
+
   async listActiveDeployments(): Promise<Deployment[]> {
     const rows = await this.db.deployment.findMany({ where: { state: { in: ACTIVE_STATES } } });
     return rows.map(toDeployment);

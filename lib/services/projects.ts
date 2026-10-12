@@ -1,4 +1,5 @@
 import type { BaseConfig } from '../config';
+import type { Dispatcher } from '../dispatch/types';
 import { encryptValue, envAad } from '../crypto';
 import {
   isBusy,
@@ -6,12 +7,13 @@ import {
   toEnvVarDTO,
   toOperationDTO,
   toProjectDTO,
+  type DeploymentDTO,
   type EnvVarDTO,
   type ProjectDTO,
   type ProjectDetailDTO,
   type ProjectSummaryDTO,
 } from '../dto';
-import { NotFoundError, ValidationError } from '../errors';
+import { NotFoundError, UnavailableError, ValidationError, errorMessage } from '../errors';
 import type { Store } from '../store/types';
 import type { Project } from '../types';
 import {
@@ -29,6 +31,7 @@ export interface ServiceContext {
   userId: string;
   store: Store;
   config: BaseConfig;
+  dispatcher: Dispatcher;
 }
 
 /**
@@ -108,4 +111,23 @@ export async function updateEnv(ctx: ServiceContext, projectId: string, input: u
   }));
   await ctx.store.applyEnv(project.id, sealed, remove.filter((key) => !(key in set)));
   return (await ctx.store.listEnv(project.id)).map(toEnvVarDTO);
+}
+
+/**
+ * Queues a deployment of the project's configured branch. The store refuses
+ * (BusyError) if one is already in flight, so double clicks and concurrent
+ * requests produce exactly one deployment.
+ */
+export async function deployProject(ctx: ServiceContext, projectId: string): Promise<DeploymentDTO> {
+  const project = await ownedProject(ctx, projectId);
+  const deployment = await ctx.store.beginDeployment(project.id, { kind: 'deploy', branch: project.branch });
+  try {
+    await ctx.dispatcher.enqueue({ type: 'deployment', id: deployment.id });
+  } catch (err) {
+    // Release the project's work slot; otherwise it would stay "busy" with nothing running.
+    const message = err instanceof UnavailableError ? err.message : `Could not queue the deployment: ${errorMessage(err)}`;
+    await ctx.store.transitionDeployment(deployment.id, ['queued'], 'failed', { error: message, finishedAt: new Date() });
+    throw err instanceof UnavailableError ? err : new UnavailableError(message);
+  }
+  return toDeploymentDTO(deployment, project);
 }

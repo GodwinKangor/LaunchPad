@@ -8,6 +8,7 @@ import { repoLabel } from '@/lib/format';
 import { isActiveState } from '@/lib/types';
 import { EnvEditor } from './EnvEditor';
 import { usePoll } from './hooks';
+import { ProjectControls } from './ProjectControls';
 import { SettingsPanel } from './SettingsPanel';
 import { ProjectBadge } from './StatusBadge';
 import { Alert, Button, Spinner, buttonClass, cx } from './ui';
@@ -22,6 +23,7 @@ export function ProjectView({ projectId }: { projectId: string }) {
   const [busyHint, setBusyHint] = useState(false);
   const { data, error, loading, refresh } = usePoll<ProjectDetailDTO>(`/api/projects/${projectId}`, busyHint ? 1_500 : 6_000);
   const [tab, setTab] = useState<TabId>('env');
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const busy = data?.busy ?? false;
   if (busy !== busyHint) setBusyHint(busy);
@@ -74,7 +76,16 @@ export function ProjectView({ projectId }: { projectId: string }) {
             </span>
           </div>
         </div>
+        {project.status !== 'deleting' && <ProjectControls detail={data} onChange={refresh} onError={setActionError} />}
       </div>
+
+      {actionError && (
+        <div className="mt-4">
+          <Alert title="That did not work" action={<Button size="sm" variant="ghost" onClick={() => setActionError(null)}>Dismiss</Button>}>
+            {actionError}
+          </Alert>
+        </div>
+      )}
 
       {error && (
         <div className="mt-4">

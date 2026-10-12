@@ -8,3 +8,4 @@ node_modules/
 .launchpad-demo.json.*
 coverage/
 .DS_Store
+next-env.d.ts

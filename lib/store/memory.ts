@@ -184,6 +184,16 @@ export class MemoryStore implements Store {
     this.changed();
   }
 
+  async promoteDeployment(id: string, patch: DeploymentPatch): Promise<boolean> {
+    const deployment = this.data.deployments.find((d) => d.id === id);
+    const project = deployment && this.data.projects.find((p) => p.id === deployment.projectId);
+    if (!deployment || !project || deployment.state !== 'starting') return false;
+    Object.assign(deployment, patch, { state: 'healthy' });
+    Object.assign(project, { activeDeploymentId: id, status: 'running', updatedAt: this.now() });
+    this.changed();
+    return true;
+  }
+
   async listActiveDeployments(): Promise<Deployment[]> {
     return this.data.deployments.filter((d) => isActiveState(d.state)).map((d) => ({ ...d }));
   }
